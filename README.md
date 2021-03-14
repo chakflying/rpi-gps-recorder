@@ -6,6 +6,12 @@ It assumes the MTK3339 is pre-configured with baudrate 115200, and is on the pi'
 
 Update rate is set to 2Hz, and can be configured in code.
 
+Tested on:
+
+- Raspberry Pi 4 2GB, running on 32-bit OS
+- Adafruit Ultimate GPS Pi HAT
+- rustc 1.50.0 compiling to `armv7-unknown-linux-gnueabihf`
+
 ## Libraries used:
 
 - [adafruit_gps](https://github.com/MechanicalPython/adafruit_gps): which parses longitude incorrectly, and needs to be manually patched (hence the local dependency config)
