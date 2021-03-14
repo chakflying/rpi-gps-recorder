@@ -88,7 +88,11 @@ fn main() {
                     ));
                     point.time = Some(Utc::now());
                     point.elevation = Some((sentence.msl_alt.unwrap_or(0.0)).into());
-                    point.fix = Some(Fix::ThreeDimensional);
+                    point.fix = if sentence.satellites_used == 3 {
+                        Some(Fix::TwoDimensional)
+                    } else {
+                        Some(Fix::ThreeDimensional)
+                    };
                     point.sat = Some(sentence.satellites_used as u64);
                     point.source = Some("MTK3339".into());
                     segment.points.push(point);
