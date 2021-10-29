@@ -14,6 +14,6 @@ Tested on:
 
 ## Libraries used:
 
-- [adafruit_gps](https://github.com/MechanicalPython/adafruit_gps): which parses longitude incorrectly, and needs to be manually patched (hence the local dependency config)
+- [adafruit_gps](https://github.com/MechanicalPython/adafruit_gps)
 - [gpx](https://github.com/georust/gpx)
-- [geo-types](https://github.com/georust/geo): old version used for compatibility with gpx
+- [geo-types](https://github.com/georust/geo)
