@@ -4,6 +4,7 @@ extern crate gpx;
 use std::fs;
 use std::sync::mpsc;
 use std::thread;
+use std::time::{Instant};
 
 use geo_types::Point;
 use gpx::{Fix, Track, TrackSegment, Waypoint};
@@ -18,6 +19,7 @@ fn main() {
     let (tx, rx) = mpsc::channel::<TrackSegment>();
     let baud_rate = "115200";
     let port = "/dev/serial0";
+    let mut last_update = Instant::now();
 
     // Open the port that is connected to the GPS module.
     let mut gps = Gps::new(port, baud_rate);
@@ -40,6 +42,7 @@ fn main() {
 
     // Use another thread for IO.
     thread::spawn(move || {
+        let filename = format!("record-{}.gpx", Local::now().format("%FT%H%M"));
         let mut gpx_file = gpx::Gpx {
             version: gpx::GpxVersion::Gpx11,
             tracks: vec![Track::new()],
@@ -50,7 +53,7 @@ fn main() {
             gpx_file.tracks[0].segments.push(received);
             let mut buf = Vec::new();
             gpx::write(&gpx_file, &mut buf).unwrap();
-            fs::write("test.gpx", buf).expect("Error Writing to file.");
+            fs::write(&filename, buf).expect("Error Writing to file.");
         }
     });
 
@@ -75,7 +78,9 @@ fn main() {
                     sentence.satellites_used,
                     sentence.msl_alt.unwrap_or(0.0)
                 );
-                if segment.points.len() > 10 {
+                if segment.points.len() > 200
+                    || (segment.points.len() > 0 && last_update.elapsed().as_secs() > 3)
+                {
                     tx.send(segment).unwrap();
                     segment = TrackSegment::new();
                 }
@@ -96,6 +101,7 @@ fn main() {
                     point.sat = Some(sentence.satellites_used as u64);
                     point.source = Some("MTK3339".into());
                     segment.points.push(point);
+                    last_update = Instant::now();
                 }
             }
             GpsSentence::GSA(sentence) => {
