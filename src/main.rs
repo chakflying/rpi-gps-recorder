@@ -2,11 +2,14 @@ extern crate adafruit_gps;
 extern crate gpx;
 
 use std::fs;
+use std::process;
 use std::sync::mpsc;
-use std::thread;
+use std::sync::Arc;
+use std::sync::RwLock;
 use std::time::Instant;
 
-use geo_types::Point;
+use geo::prelude::*;
+use geo::Point;
 use gpx::{Fix, Track, TrackSegment, Waypoint};
 
 use chrono::prelude::*;
@@ -16,6 +19,8 @@ use adafruit_gps::NmeaOutput;
 use adafruit_gps::{Gps, GpsSentence};
 
 use rusqlite::{Connection, Result};
+
+use ctrlc;
 
 // Open and prepare Database
 fn open_db() -> Result<Connection> {
@@ -42,17 +47,11 @@ fn open_db() -> Result<Connection> {
 }
 
 fn main() {
-    let (tx, rx) = mpsc::channel::<TrackSegment>();
+    // Since CtrlC is handled in another thread, we need to signal the main thread to exit
+    let (tx, rx) = mpsc::channel::<bool>();
+
     let baud_rate = "115200";
     let port = "/dev/serial0";
-
-    // Store last update
-    let mut last_update = Instant::now();
-
-    let mut last_speed = 0.0;
-    let mut last_speed_update = Instant::now();
-    let (mut pdop, mut vdop, mut hdop) = (0.0, 0.0, 0.0);
-    let mut last_dop_update = Instant::now();
 
     // Open the port that is connected to the GPS module.
     let mut gps = Gps::new(port, baud_rate);
@@ -73,28 +72,62 @@ fn main() {
     let db = open_db().expect("Error connecting to database");
 
     // Store a segment in main thread.
-    let mut segment = TrackSegment::new();
+    let segment = Arc::new(RwLock::new(TrackSegment::new()));
 
-    // Use another thread for IO.
-    thread::spawn(move || {
+    // Another reference used to write to gpx file in CtrlC handler
+    let out_segment = segment.clone();
+
+    // Track last write to the segment history
+    let mut last_update = Instant::now();
+    let mut last_speed = 0.0;
+    let mut last_speed_update = Instant::now();
+    let (mut pdop, mut vdop, mut hdop) = (0.0, 0.0, 0.0);
+    let mut last_dop_update = Instant::now();
+
+    let mut saving = false;
+
+    ctrlc::set_handler(move || {
+        // Prevent duplicate save
+        if saving {
+            return;
+        } else {
+            saving = true;
+        }
+
         let filename = format!("record-{}.gpx", Local::now().format("%FT%H%M"));
         let mut gpx_file = gpx::Gpx {
             version: gpx::GpxVersion::Gpx11,
             tracks: vec![Track::new()],
             ..gpx::Gpx::default()
         };
-        for received in rx {
-            println!("Got segment with {} points.", received.points.len());
-            gpx_file.tracks[0].segments.push(received);
-            let mut buf = Vec::new();
-            gpx::write(&gpx_file, &mut buf).unwrap();
-            fs::write(&filename, buf).expect("Error Writing to file.");
-        }
-    });
+
+        println!(
+            "Saving segment with {} points.",
+            out_segment.read().unwrap().points.len()
+        );
+        gpx_file.tracks[0]
+            .segments
+            .push((*out_segment.write().unwrap()).clone());
+        let mut buf = Vec::new();
+        gpx::write(&gpx_file, &mut buf).unwrap();
+        fs::write(&filename, buf).expect("Error Writing to file.");
+
+        tx.send(true).expect("Failed to send exit to main thread");
+    })
+    .expect("Error setting Ctrl-C handler");
 
     // In a loop, constantly update the gps. The update trait will give you all the data you
     // want from the gps module.
     loop {
+        // Main thread is signal to exit
+        match rx.try_recv() {
+            Ok(_) => {
+                db.close().expect("Failed to close database connection");
+                process::exit(0);
+            }
+            Err(_) => {}
+        }
+
         let values = gps.update();
 
         // Depending on what values you are interested in you can adjust what sentences you
@@ -114,43 +147,37 @@ fn main() {
                 //     sentence.satellites_used,
                 //     sentence.msl_alt.unwrap_or(0.0)
                 // );
-                if segment.points.len() > 200
-                    || (segment.points.len() > 0 && last_update.elapsed().as_secs() > 3)
-                {
-                    tx.send(segment).unwrap();
-                    segment = TrackSegment::new();
-                }
 
                 // Add point to GPX if there is a fix
                 if sentence.sat_fix != gga::SatFix::NoFix {
                     // Create Waypoint and write data
-                    let mut point = Waypoint::new(Point::new(
+                    let mut waypoint = Waypoint::new(Point::new(
                         sentence.long.unwrap_or(0.0).into(),
                         sentence.lat.unwrap_or(0.0).into(),
                     ));
 
-                    point.time = Some(Utc::now());
+                    waypoint.time = Some(Utc::now());
 
-                    point.elevation = Some((sentence.msl_alt.unwrap_or(0.0)).into());
+                    waypoint.elevation = Some((sentence.msl_alt.unwrap_or(0.0)).into());
 
-                    point.fix = if sentence.satellites_used == 3 {
+                    waypoint.fix = if sentence.satellites_used == 3 {
                         Some(Fix::TwoDimensional)
                     } else {
                         Some(Fix::ThreeDimensional)
                     };
 
-                    point.sat = Some(sentence.satellites_used as u64);
+                    waypoint.sat = Some(sentence.satellites_used as u64);
 
-                    point.source = Some("MTK3339".into());
+                    waypoint.source = Some("MTK3339".into());
 
                     if last_speed_update.elapsed().as_secs() < 3 {
-                        point.speed = Some(last_speed / 3.6);
+                        waypoint.speed = Some(last_speed / 3.6);
                     }
 
                     if last_dop_update.elapsed().as_secs() < 3 {
-                        point.vdop = Some(vdop);
-                        point.hdop = Some(hdop);
-                        point.pdop = Some(pdop);
+                        waypoint.vdop = Some(vdop);
+                        waypoint.hdop = Some(hdop);
+                        waypoint.pdop = Some(pdop);
                     }
 
                     // Write to database
@@ -159,7 +186,7 @@ fn main() {
                         .expect("Failed to prepare SQL statement");
 
                     let save_result = stmt.execute([
-                        serde_json::to_string(&point).expect("Failed to serialize location")
+                        serde_json::to_string(&waypoint).expect("Failed to serialize location")
                     ]);
                     match save_result {
                         Err(e) => {
@@ -168,7 +195,15 @@ fn main() {
                         _ => {}
                     }
 
-                    segment.points.push(point);
+                    if let Some(last_point) = segment.write().unwrap().points.last_mut() {
+                        if last_point.point().geodesic_distance(&waypoint.point()) < 3.0
+                            && last_update.elapsed().as_secs() < 5
+                        {
+                            println!("No significant movement, skipping write.");
+                            continue;
+                        }
+                    }
+                    segment.write().unwrap().points.push(waypoint);
                     last_update = Instant::now();
                 }
             }
@@ -187,7 +222,7 @@ fn main() {
                 vdop = sentence.vdop.unwrap_or(0.0).into();
                 hdop = sentence.hdop.unwrap_or(0.0).into();
 
-                if let Some(last_point) = segment.points.last_mut() {
+                if let Some(last_point) = segment.write().unwrap().points.last_mut() {
                     last_point.hdop = Some(sentence.hdop.unwrap_or(0.0).into());
                     last_point.vdop = Some(sentence.vdop.unwrap_or(0.0).into());
                     last_point.pdop = Some(sentence.pdop.unwrap_or(0.0).into());

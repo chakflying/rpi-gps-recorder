@@ -9,15 +9,16 @@ version = "0.1.0"
 [dependencies]
 adafruit_gps = "0.4.1"
 chrono = "0.4"
+ctrlc = "3.2"
 serde_json = "1.0"
 
 [dependencies.gpx]
 features = ["use-serde"]
 version = "0.8"
 
-[dependencies.geo-types]
+[dependencies.geo]
 features = ["serde"]
-version = "0.7"
+version = "0.18"
 
 [dependencies.rusqlite]
 features = ["bundled"]
