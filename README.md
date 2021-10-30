@@ -10,7 +10,7 @@ Tested on:
 
 - Raspberry Pi 4 2GB, running on 32-bit OS
 - Adafruit Ultimate GPS Pi HAT
-- rustc 1.50.0 compiling to `armv7-unknown-linux-gnueabihf`
+- rustc 1.56.0 compiling to `armv7-unknown-linux-gnueabihf`
 
 ## Libraries used:
 
