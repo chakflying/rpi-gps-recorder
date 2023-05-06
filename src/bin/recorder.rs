@@ -1,6 +1,3 @@
-extern crate adafruit_gps;
-extern crate gpx;
-
 use std::fs;
 use std::process;
 use std::sync::mpsc;
@@ -13,42 +10,19 @@ use geo::prelude::*;
 use geo::Point;
 use gpx::{Fix, Track, TrackSegment, Waypoint};
 
-use chrono::prelude::*;
+use time::macros::{format_description, offset};
+use time::OffsetDateTime;
 
 use adafruit_gps::gga;
 use adafruit_gps::NmeaOutput;
 use adafruit_gps::{Gps, GpsSentence};
-
-use rusqlite::{Connection, Result};
 
 use ctrlc;
 
 use tracing::{debug, error, info, warn};
 use tracing_subscriber;
 
-// Open and prepare Database
-fn open_db() -> Result<Connection> {
-    let db_path = "./data/data.db";
-    let db = Connection::open(&db_path)?;
-    db.pragma_update(None, "foreign_keys", "ON")
-        .expect("Failed to set PRAGMA");
-    db.pragma_update(None, "journal_mode", "WAL")
-        .expect("Failed to set PRAGMA");
-    db.pragma_update(None, "auto_vacuum", "FULL")
-        .expect("Failed to set PRAGMA");
-
-    db.execute(
-        "CREATE TABLE IF NOT EXISTS location_history (
-                  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                  waypoint        TEXT NOT NULL,
-                  createdAt       TEXT DEFAULT CURRENT_TIMESTAMP
-                  )",
-        [],
-    )
-    .expect("Failed when checking for history table in database");
-
-    Ok(db)
-}
+use rpi_gps_recorder::database;
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -79,7 +53,7 @@ fn main() {
     let rate_result = gps.pmtk_220_set_nmea_updaterate("500");
     info!("Set update rate to 500ms: {:?}", rate_result);
 
-    let db = open_db().expect("Error connecting to database");
+    let db = database::open_db().expect("Error connecting to database");
 
     // Store a segment in main thread.
     let segment = Arc::new(RwLock::new(TrackSegment::new()));
@@ -104,17 +78,26 @@ fn main() {
             saving = true;
         }
 
-        let filename = format!("record-{}.gpx", Local::now().format("%FT%H%M"));
-        let mut gpx_file = gpx::Gpx {
-            version: gpx::GpxVersion::Gpx11,
-            tracks: vec![Track::new()],
-            ..gpx::Gpx::default()
-        };
-
         let num_points = out_segment.read().unwrap().points.len();
 
         if num_points > 0 {
             info!("Saving segment with {} points.", num_points);
+
+            let filename = format!(
+                "record-{}.gpx",
+                OffsetDateTime::now_utc()
+                    .replace_offset(offset!(+8))
+                    .format(format_description!(
+                        "[year]-[month]-[day]-[hour][minute][second]"
+                    ))
+                    .unwrap()
+            );
+            let mut gpx_file = gpx::Gpx {
+                version: gpx::GpxVersion::Gpx11,
+                tracks: vec![Track::new()],
+                ..gpx::Gpx::default()
+            };
+
             gpx_file.tracks[0]
                 .segments
                 .push((*out_segment.write().unwrap()).clone());
@@ -167,7 +150,7 @@ fn main() {
                         sentence.lat.unwrap_or(0.0).into(),
                     ));
 
-                    waypoint.time = Some(Utc::now());
+                    waypoint.time = Some(OffsetDateTime::now_utc().into());
 
                     waypoint.elevation = Some((sentence.msl_alt.unwrap_or(0.0)).into());
 
