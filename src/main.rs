@@ -28,7 +28,7 @@ use tracing_subscriber;
 
 // Open and prepare Database
 fn open_db() -> Result<Connection> {
-    let db_path = "./data.db";
+    let db_path = "./data/data.db";
     let db = Connection::open(&db_path)?;
     db.pragma_update(None, "foreign_keys", "ON")
         .expect("Failed to set PRAGMA");
