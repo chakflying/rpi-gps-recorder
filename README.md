@@ -2,7 +2,7 @@
 
 This is a simple command-line program that takes gps data from the Adafruit Ultimate GPS and writes to a .gpx file.
 
-It assumes the MTK3339 is pre-configured with baudrate 115200, and is on the pi's `/dev/serial0`.
+It assumes the MTK3339 is conected to pi's `/dev/serial0`.
 
 Update rate is set to 2Hz, and can be configured in code.
 
@@ -10,7 +10,7 @@ Tested on:
 
 - Raspberry Pi 4 2GB, running on 32-bit OS
 - Adafruit Ultimate GPS Pi HAT
-- rustc 1.56.0 compiling to `armv7-unknown-linux-gnueabihf`
+- rustc 1.69.0 compiling to `armv7-unknown-linux-gnueabihf`
 
 ## Libraries used:
 
