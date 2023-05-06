@@ -6,7 +6,8 @@ use std::process;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::time::Instant;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use geo::prelude::*;
 use geo::Point;
@@ -21,6 +22,9 @@ use adafruit_gps::{Gps, GpsSentence};
 use rusqlite::{Connection, Result};
 
 use ctrlc;
+
+use tracing::{debug, error, info, warn};
+use tracing_subscriber;
 
 // Open and prepare Database
 fn open_db() -> Result<Connection> {
@@ -47,11 +51,17 @@ fn open_db() -> Result<Connection> {
 }
 
 fn main() {
+    tracing_subscriber::fmt::init();
+
     // Since CtrlC is handled in another thread, we need to signal the main thread to exit
     let (tx, rx) = mpsc::channel::<bool>();
 
     let baud_rate = "115200";
     let port = "/dev/serial0";
+
+    adafruit_gps::set_baud_rate(baud_rate, port);
+
+    thread::sleep(Duration::from_millis(100));
 
     // Open the port that is connected to the GPS module.
     let mut gps = Gps::new(port, baud_rate);
@@ -67,7 +77,7 @@ fn main() {
         pmtkchn_interval: 1,
     });
     let rate_result = gps.pmtk_220_set_nmea_updaterate("500");
-    println!("Set update rate to 500ms: {:?}", rate_result);
+    info!("Set update rate to 500ms: {:?}", rate_result);
 
     let db = open_db().expect("Error connecting to database");
 
@@ -101,16 +111,17 @@ fn main() {
             ..gpx::Gpx::default()
         };
 
-        println!(
-            "Saving segment with {} points.",
-            out_segment.read().unwrap().points.len()
-        );
-        gpx_file.tracks[0]
-            .segments
-            .push((*out_segment.write().unwrap()).clone());
-        let mut buf = Vec::new();
-        gpx::write(&gpx_file, &mut buf).unwrap();
-        fs::write(&filename, buf).expect("Error Writing to file.");
+        let num_points = out_segment.read().unwrap().points.len();
+
+        if num_points > 0 {
+            info!("Saving segment with {} points.", num_points);
+            gpx_file.tracks[0]
+                .segments
+                .push((*out_segment.write().unwrap()).clone());
+            let mut buf = Vec::new();
+            gpx::write(&gpx_file, &mut buf).unwrap();
+            fs::write(&filename, buf).expect("Error Writing to file.");
+        }
 
         tx.send(true).expect("Failed to send exit to main thread");
     })
@@ -133,20 +144,20 @@ fn main() {
         // Depending on what values you are interested in you can adjust what sentences you
         // wish to get and ignore all other sentences.
         match values {
-            GpsSentence::InvalidSentence => println!("Invalid sentence, try again"),
-            GpsSentence::InvalidBytes => println!("Invalid bytes given, try again"),
-            GpsSentence::NoConnection => println!("No connection with gps"),
+            GpsSentence::InvalidSentence => warn!("Invalid sentence, wrong baud rate?"),
+            GpsSentence::InvalidBytes => warn!("Invalid bytes given, try again"),
+            GpsSentence::NoConnection => warn!("No connection with gps"),
 
             GpsSentence::GGA(sentence) => {
-                // println!(
-                //     "UTC: {}, Fix: {:?}\nLat: {}, Long: {}, Sats: {}, MSL Alt: {}",
-                //     sentence.utc,
-                //     (sentence.sat_fix != gga::SatFix::NoFix),
-                //     sentence.lat.unwrap_or(0.0),
-                //     sentence.long.unwrap_or(0.0),
-                //     sentence.satellites_used,
-                //     sentence.msl_alt.unwrap_or(0.0)
-                // );
+                debug!(
+                    "UTC: {}, Fix: {:?}\nLat: {}, Long: {}, Sats: {}, MSL Alt: {}",
+                    sentence.utc,
+                    (sentence.sat_fix != gga::SatFix::NoFix),
+                    sentence.lat.unwrap_or(0.0),
+                    sentence.long.unwrap_or(0.0),
+                    sentence.satellites_used,
+                    sentence.msl_alt.unwrap_or(0.0)
+                );
 
                 // Add point to GPX if there is a fix
                 if sentence.sat_fix != gga::SatFix::NoFix {
@@ -190,7 +201,7 @@ fn main() {
                     ]);
                     match save_result {
                         Err(e) => {
-                            println!("Error when saving to database: {:?}", e)
+                            error!("Error when saving to database: {:?}", e)
                         }
                         _ => {}
                     }
@@ -199,7 +210,7 @@ fn main() {
                         if last_point.point().geodesic_distance(&waypoint.point()) < 3.0
                             && last_update.elapsed().as_secs() < 5
                         {
-                            println!("No significant movement, skipping write.");
+                            debug!("No significant movement, skipping write.");
                             continue;
                         }
                     }
@@ -209,7 +220,7 @@ fn main() {
             }
 
             GpsSentence::GSA(sentence) => {
-                println!(
+                info!(
                     "PDOP: {}, VDOP:{}, HDOP:{}",
                     sentence.pdop.unwrap_or(0.0),
                     sentence.vdop.unwrap_or(0.0),
@@ -230,7 +241,7 @@ fn main() {
             }
 
             GpsSentence::GSV(sentence) => {
-                println!(
+                debug!(
                     "Signal Strength (dB): {:?}",
                     sentence
                         .iter()
@@ -240,7 +251,7 @@ fn main() {
             }
 
             GpsSentence::VTG(sentence) => {
-                println!("Speed kph: {}", sentence.speed_kph.unwrap_or(0.0));
+                info!("Speed kph: {}", sentence.speed_kph.unwrap_or(0.0));
                 last_speed = sentence.speed_kph.unwrap_or(0.0).into();
                 last_speed_update = Instant::now();
             }
